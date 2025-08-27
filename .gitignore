@@ -2,6 +2,8 @@
 __pycache__/
 *.py[codz]
 *$py.class
+*.pth
+final_models/
 
 # C extensions
 *.so
