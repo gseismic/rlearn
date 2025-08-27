@@ -1,9 +1,9 @@
 import gymnasium as gym
 import time
-from rlearn_dev.methods.ppo.draft import PPOAgent
-from rlearn_dev.core.env_player import SyncVecEnvPlayer
-from rlearn_dev.utils.eval_agent import eval_agent_performance
-from rlearn_dev.utils.seed import seed_all
+from rlearn.method.ppo.naive.agent import PPOAgent
+from rlearn.core.player.naive.sync_vec_env import SyncVecEnvPlayer
+from rlearn.utils.eval_agent import eval_agent_performance
+from rlearn.utils.seed import seed_all
 
 # make reproducible
 g_seed = 36
@@ -34,9 +34,9 @@ def test_ppo_draft_envplayer():
         'num_minibatches': 10, # minibatch_size: batch_size/num_minibatches
     }
     max_epochs = 5
-    # 小步迭代: num_envs * steps_per_epoch
+    # 小步迭代: num_envs * steps_per_epoch 
     # too small steps_per_epoch will make value not stable
-    steps_per_epoch = 500
+    steps_per_epoch = 500 
 
     agent = PPOAgent(envs, config=config, seed=g_seed)
     info = agent.learn(max_epochs, 

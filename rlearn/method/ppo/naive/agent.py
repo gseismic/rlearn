@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import gymnasium as gym
 from rlearn.core.agent.main.online_agent_ve import OnlineAgentVE
+# from rlearn.core.agent.naive.vector.online_agent import OnlineAgent
 from .network.discrete import ActorCritic as ActorCriticDiscrete
 from .network.continous import ActorCritic as ActorCriticContinous
 
@@ -164,23 +165,24 @@ class PPOAgent(OnlineAgentVE):
             # predicted return
             next_value = self.actor_critic.get_value(next_state).reshape(1, -1) # shape: (1, num_envs)
             advantages = torch.zeros_like(rewards).to(device) # shape: (steps_per_epoch, num_envs)
-            lastgaelam = 0
+            lastgaelam = 0 # torch.zeros_like(rewards).to(device) # shape: (num_envs, )
             gamma = self.gamma
             gae_lambda = self.gae_lambda
             for t in reversed(range(self.steps_per_epoch)):
                 if t == self.steps_per_epoch - 1:
-                    nextnonterminal = 1.0 - next_done       
+                    nextnonterminal = 1.0 - next_done 
                     nextvalues = next_value
                 else:
-                    nextnonterminal = 1.0 - dones[t + 1]
+                    nextnonterminal = 1.0 - dones[t + 1] 
                     nextvalues = values[t + 1]
                 delta = rewards[t] + gamma * nextvalues * nextnonterminal - values[t]
                 advantages[t] = lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
+                assert advantages[t].shape == (self.num_envs, )
             returns = advantages + values
         return advantages, returns
             
-    def after_episode(self, epoch, episode_reward, **kwargs):
-        should_exit_program = False
+    def after_episode(self, epoch, episode_reward=None, **kwargs):
+        should_exit_learning = False
         (states, actions, rewards, dones, values, log_probs) = (
             self.states, self.actions, self.rewards, self.dones, self.values, self.log_probs
         )
@@ -235,7 +237,7 @@ class PPOAgent(OnlineAgentVE):
                     # 因为有update_epochs随机复用数据，丢弃部分数据是可行的
                     # 防止数据太少导致误差
                     if len(mini_batch_indices) != local_minibatch_size:
-                        continue
+                        continue 
 
                     # NOTE: 因为是mini-batch, 所有计算很快
                     if isinstance(self.single_action_space, gym.spaces.Box):
@@ -299,7 +301,7 @@ class PPOAgent(OnlineAgentVE):
                     loss.backward()
                     if self.max_grad_norm is not None:
                         nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                    self.optimizer.step()
+                    self.optimizer.step() 
 
                 if epoch % 20 == 0:
                     self.logger.debug(
@@ -317,8 +319,8 @@ class PPOAgent(OnlineAgentVE):
                 
                 if self.v_clipfrac_stop is not None and len(v_clipfracs) > 3 and np.mean(v_clipfracs[-3:]) >= self.clipfrac_stop:
                     self.logger.debug(f"Early stopping at step {epoch} due to Value clipping: {v_clipfrac}")
-                    exit_this_train = True
-                    break
+                    # exit_this_train = True
+                    # break
                 
                 if self.kl_stop is not None and approx_kl > self.kl_stop:
                     self.logger.debug(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl.detach().cpu().item()}")
@@ -328,7 +330,7 @@ class PPOAgent(OnlineAgentVE):
                 if self.target_kl is not None and approx_kl > self.target_kl:
                     self.logger.info(f"Early stopping Program at step {epoch} due to reaching max kl: {approx_kl.detach().cpu().item()}")
                     exit_this_train = True
-                    should_exit_program = True
+                    should_exit_learning = True
                     break
                 
         self.restore_lr()
@@ -350,7 +352,7 @@ class PPOAgent(OnlineAgentVE):
         self.logger.info(f'**{episode_info=}')
         # self._debug_test()
 
-        return should_exit_program, episode_info
+        return should_exit_learning, episode_info
         
     def after_learn(self):
         pass

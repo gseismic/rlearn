@@ -9,6 +9,8 @@ def make_vec_env_player(env_fn, num_envs):
 # Gymnasium-like SyncVecEnvPlayer
 class SyncVecEnvPlayer(BaseVecEnvPlayer):
     """
+    永续环境，当环境终止时，会自动重置环境，并继续执行下一个环境。
+    
     SyncVecEnvPlayer is a vectorized environment player that uses a single process to step multiple environments.
     Reference:
         https://github.com/Farama-Foundation/Gymnasium/blob/main/gymnasium/vector/sync_vector_env.py
@@ -29,6 +31,7 @@ class SyncVecEnvPlayer(BaseVecEnvPlayer):
         self._infos = {'infos': []}
 
     def reset(self, seed=None, options=None):
+        # 只应该被调用一次 
         if seed is None:
             seed = [None] * self.num_envs
         elif isinstance(seed, int):

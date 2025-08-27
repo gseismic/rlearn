@@ -23,7 +23,7 @@ class OnlineAgentVE(BaseAgent):
     def before_episode(self, *args, **kwargs):
         pass
     
-    def after_episode(self, epoch, episode_reward, *args, **kwargs):
+    def after_episode(self, epoch, episode_reward=None, *args, **kwargs):
         pass
     
     def after_learn(self, *args, **kwargs):
@@ -34,15 +34,12 @@ class OnlineAgentVE(BaseAgent):
               steps_per_epoch, 
               max_total_steps=None, 
               max_runtime=None,
-              reward_threshold=None,
+              max_episodes=None,
+              target_episode_reward=None,
               reward_window_size=100,
               min_reward_threshold=None,
-              max_reward_threshold=None,
-              reward_check_freq=10,
+              max_episodes_without_improvement=None,
               verbose_freq=10,
-              no_improvement_threshold=50,
-              improvement_threshold=None,
-              improvement_ratio_threshold=None,
               checkpoint_freq=None,
               checkpoint_dir='checkpoints',
               final_model_name=None,
@@ -60,14 +57,11 @@ class OnlineAgentVE(BaseAgent):
         exit_monitor = ExitMonitor({
             'max_total_steps': max_total_steps,
             'max_runtime': max_runtime,
-            'reward_threshold': reward_threshold,
+            'max_episodes': max_episodes,
+            'target_episode_reward': target_episode_reward,
             'reward_window_size': reward_window_size,
             'min_reward_threshold': min_reward_threshold,
-            'max_reward_threshold': max_reward_threshold,
-            'reward_check_freq': reward_check_freq,
-            'no_improvement_threshold': no_improvement_threshold,
-            'improvement_threshold': improvement_threshold,
-            'improvement_ratio_threshold': improvement_ratio_threshold
+            'max_episodes_without_improvement': max_episodes_without_improvement,
         })
         self.num_envs = self.env.num_envs
         self.single_action_space = self.env.single_action_space
@@ -85,28 +79,24 @@ class OnlineAgentVE(BaseAgent):
         self.before_learn(states, infos, max_epochs=max_epochs, steps_per_epoch=steps_per_epoch)
         total_steps = 0
         start_time = time.time()
-        # vec_episode_dones = np.zeros(self.num_envs, dtype=bool)
+        
+        cur_episode_ends = np.zeros(self.num_envs, dtype=bool) # 当前episode是否结束
+        cur_episode_acc_rewards = np.zeros(self.num_envs) # 当前最新累积的episode reward
+        cur_episode_acc_lengths = np.zeros(self.num_envs) # 当前最新累积的episode length
 
-        vec_episode_rewards = np.zeros(self.num_envs)
-        vec_episode_lengths = np.zeros(self.num_envs)
-        # 因为是参数共享，所以直接对最近的reward求平均
-        rolling_episode_rewards = deque(maxlen=reward_window_size)
-        rolling_episode_lengths = deque(maxlen=reward_window_size)
-        latest_episode_reward = np.nan
-        latest_episode_length = np.nan
-        total_episode_rewards = 0
-        total_episode_lengths = 0
+        should_exit_program = False 
         for epoch in range(max_epochs):
+            if should_exit_program: 
+                break 
             self.before_episode(epoch=epoch)
             # 不能在此reset，因为 steps_per_epoch不是真正的结束
-            # vec_episode_rewards.fill(0) # reset
-            # vec_episode_lengths.fill(0) # reset
-            # avg_episode_perstep_reward = np.nan
-            # avg_episode_reward = np.nan
             for epoch_step in range(steps_per_epoch):
                 actions = self.select_action(states, epoch_step=epoch_step)
                 (next_obs, rewards, terminates, truncates, infos) = self.env.step(actions)
-                dones = np.logical_or(terminates, truncates)
+                # TODO: terminates为 True才应看为done 
+                dones = np.logical_or(terminates, truncates) 
+                cur_episode_ends = np.logical_or(terminates, truncates) 
+                assert cur_episode_ends.shape == (self.num_envs, )
                 
                 # 只有episode结束，且next_obs为None时，才用全零状态代替
                 next_obs = np.array([
@@ -117,58 +107,46 @@ class OnlineAgentVE(BaseAgent):
                 if len(next_obs.shape) == 1:
                     next_obs = next_obs.reshape(-1, 1)
                 
-                vec_episode_rewards += rewards
-                vec_episode_lengths += 1
+                # new 
+                cur_episode_acc_rewards += np.array(rewards)
+                cur_episode_acc_lengths += 1 
                 
-                # vec_episode_dones[~dones] = False
-                # vec_episode_dones[dones] = True
-                if any(dones):
-                    # 因为参数共享，所以直接对最近的reward求平均
-                    # rolling_episode_rewards.append(np.mean(vec_episode_rewards[dones]))
-                    # rolling_episode_lengths.append(np.mean(vec_episode_lengths[dones]))
-                    rolling_episode_rewards.extend(vec_episode_rewards[dones])
-                    rolling_episode_lengths.extend(vec_episode_lengths[dones])
-                    latest_episode_reward = rolling_episode_rewards[-1]
-                    latest_episode_length = rolling_episode_lengths[-1]
-                    total_episode_rewards += np.sum(vec_episode_rewards[dones])
-                    total_episode_lengths += np.sum(vec_episode_lengths[dones])
-                # avg_episode_perstep_reward = np.nanmean(vec_episode_rewards[dones] / vec_episode_lengths[dones])
-                # avg_episode_reward = np.nanmean(rolling_episode_rewards)
-                vec_episode_rewards[dones] = 0 # reset
-                vec_episode_lengths[dones] = 0 # reset
-                total_steps += 1
+                total_steps += self.num_envs # 环境步数 
                 
                 self.step(next_obs, rewards, terminates, truncates, infos,
                           epoch=epoch, epoch_step=epoch_step)
                 
                 states = next_obs
-
-            ep_should_exit, episode_info = self.after_episode(epoch=epoch, episode_reward=latest_episode_reward, episode_length=latest_episode_length)
-            should_exit, exit_reason = exit_monitor.should_exit(latest_episode_reward, latest_episode_length)
-            if exit_monitor.episode_count % verbose_freq == 0:
-                assert len(rolling_episode_rewards) == len(rolling_episode_lengths)
-                if len(rolling_episode_lengths) > 0:
-                    avg_episode_reward = np.nanmean(rolling_episode_rewards)
-                    avg_episode_length = np.nanmean(rolling_episode_lengths)
-                    avg_episode_perstep_reward = np.sum(rolling_episode_rewards) / np.sum(rolling_episode_lengths)
+                
+                # 因为一次时刻可能多个环境完成 
+                if epoch_step == steps_per_epoch - 1:
+                    should_exit_learning, episode_info = self.after_episode(epoch=epoch)
                 else:
-                    avg_episode_reward = np.nan
-                    avg_episode_length = np.nan
-                    avg_episode_perstep_reward = np.nan
-                self.logger.info(
-                    f"Episode {exit_monitor.episode_count}/{max_epochs}: "
-                    f"{tr('average_episode_reward')}: {avg_episode_reward}, "
-                    f"{tr('average_episode_length')}: {avg_episode_length}, "
-                    f"{tr('average_perstep_reward')}: {avg_episode_perstep_reward}"
-                )
+                    should_exit_learning = False
+                    episode_info = None
+                
+                if np.sum(cur_episode_ends) > 0:
+                    # 有新episode 
+                    # 只用到了cur_episode_ends真的数据  
+                    should_exit, exit_reason = exit_monitor.should_exit(
+                        total_steps,
+                        cur_episode_ends,
+                        cur_episode_acc_rewards, 
+                        cur_episode_acc_lengths
+                    ) 
 
-            if should_exit:
-                self.logger.info(f"{tr('exit_reason')}: {tr(exit_reason)}")
-                break
-            
-            if ep_should_exit:
-                self.logger.info(f'Early stopping: {str(episode_info)}')
-                break
+                    if should_exit:
+                        self.logger.info(f"{tr('exit_reason')}: {tr(exit_reason)}")
+                        should_exit_program = True
+                        break 
+                                  
+                cur_episode_acc_rewards[cur_episode_ends] = 0 
+                cur_episode_acc_lengths[cur_episode_ends] = 0 
+
+                if should_exit_learning: 
+                    self.logger.info(f'Early stopping: {str(episode_info)}')
+                    should_exit_program = True 
+                    break
             
             if checkpoint_freq and exit_monitor.episode_count % checkpoint_freq == 0:
                 checkpoint_dir = checkpoint_dir or 'checkpoints'

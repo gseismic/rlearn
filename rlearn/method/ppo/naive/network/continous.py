@@ -16,12 +16,14 @@ class ActorCritic(nn.Module):
         self.action_space = action_space
         self.rpo_alpha = rpo_alpha
 
-        if self.action_space.high is not None and self.action_space.low is not None:
+        if (self.action_space.high is not None and self.action_space.low is not None and 
+            not (np.isinf(self.action_space.high).any() or np.isinf(self.action_space.low).any())):
             self.action_low = torch.tensor(self.action_space.low, dtype=torch.float32)
             self.action_high = torch.tensor(self.action_space.high, dtype=torch.float32)
             self.scale_action = scale_action
         else:
             self.scale_action = False
+        
         self.critic = nn.Sequential(
             layer_init(nn.Linear(np.prod(self.state_dim), 64)),
             nn.Tanh(),
@@ -77,7 +79,10 @@ class ActorCritic(nn.Module):
         else: # new to RPO
             # sample again to add stochasticity, for the policy update
             device = action_mean.device
-            z = torch.FloatTensor(action_mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha).to(device)
+            if self.rpo_alpha is None:
+                z = torch.zeros_like(action_mean)
+            else:
+                z = torch.FloatTensor(action_mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha).to(device)
             action_mean = action_mean + z
             probs = Normal(action_mean, action_std)
             

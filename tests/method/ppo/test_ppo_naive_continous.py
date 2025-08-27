@@ -1,9 +1,9 @@
 import gymnasium as gym
 import time
 import numpy as np
-from rlearn_dev.methods.ppo.draft import PPOAgent
-from rlearn_dev.utils.eval_agent import eval_agent_performance
-from rlearn_dev.utils.seed import seed_all
+from rlearn.method.ppo.naive import PPOAgent
+from rlearn.utils.eval_agent import eval_agent_performance
+from rlearn.utils.seed import seed_all
 
 
 # make reproducible
@@ -30,20 +30,20 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
-        env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = gym.wrappers.ClipAction(env) # np.clip(action, self.action_space.low, self.action_space.high)
-        env = gym.wrappers.NormalizeObservation(env)
-        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10), env.observation_space)
-        env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-        env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
+        # env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
+        # env = gym.wrappers.RecordEpisodeStatistics(env)
+        # env = gym.wrappers.ClipAction(env) # np.clip(action, self.action_space.low, self.action_space.high)
+        # env = gym.wrappers.NormalizeObservation(env)
+        # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10), env.observation_space)
+        # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+        # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
 
     return thunk
 
 def test_ppo_draft_continous():
     # env setup
-    num_envs = 10
+    num_envs = 1
     # env_id = 'CliffWalking-v0'
     # env_id = 'Hopper-v4' # 'Pendulum-v1'
     env_id = 'HalfCheetah-v4'
@@ -61,13 +61,13 @@ def test_ppo_draft_continous():
     # tips: increate update_epochs
     # 当update_epochs很大的时候，clip_vloss可能必要
     # 如果gae_lambda*gamma很小，长步长在将降低到计算机精度以下
-    gae_lambda = 0.95
+    gae_lambda = 0.95 
     config = {
         'learning_rate': 3e-4,
         'gamma': gamma,
         'gae_lambda': gae_lambda,
-        'rpo_alpha': 0.5, # 
-        'ent_coef': 0.1, # XXX zero
+        'rpo_alpha': 0.5, # 0.5, # 
+        'ent_coef': 0.0, # XXX zero
         'clip_coef': 0.2,
         'vf_coef': 0.5,
         'clip_vloss': False, # XXX
@@ -78,7 +78,7 @@ def test_ppo_draft_continous():
     max_epochs = 500
     # 小步迭代: num_envs * steps_per_epoch
     # too small steps_per_epoch will make value not stable
-    steps_per_epoch = 200 # 2048
+    steps_per_epoch = 2048 # 200 # 2048
 
     agent = PPOAgent(envs, config=config, seed=g_seed)
     info = agent.learn(max_epochs, 
@@ -87,7 +87,7 @@ def test_ppo_draft_continous():
                        verbose_freq=1)
     print(info)
     
-    max_steps = 1000
+    max_steps = steps_per_epoch
     single_env = gym.make(env_id)
     performance_stats = eval_agent_performance(agent, single_env, 
                                                num_episodes=10, 
