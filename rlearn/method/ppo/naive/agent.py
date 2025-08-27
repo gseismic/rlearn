@@ -44,6 +44,7 @@ class PPOAgent(OnlineAgentVE):
         self.max_grad_norm = self.config.get('max_grad_norm', 0.5)
         self.target_kl = self.config.get('target_kl', None)
         self.kl_coef = self.config.get('kl_coef', None)
+        self.use_minibatch_norm_adv = self.config.get('use_minibatch_norm_adv', False)
         
         self.rpo_alpha = self.config.get('rpo_alpha', 0.0)
         
@@ -203,6 +204,9 @@ class PPOAgent(OnlineAgentVE):
         v_clipfracs = []
         v_clipfrac = 0.0
         
+        if self.norm_adv and not self.use_minibatch_norm_adv:
+            batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std() + self.norm_adv_eps)
+        
         # 每个数据还是跑一遍，但分多批
         # self.save_lr()
         exit_this_train = False
@@ -260,7 +264,7 @@ class PPOAgent(OnlineAgentVE):
                     
                     # ** normalize mbatch_advantages **
                     mbatch_advantages = batch_advantages[mini_batch_indices]
-                    if self.norm_adv: 
+                    if self.norm_adv and self.use_minibatch_norm_adv:
                         mbatch_advantages = (mbatch_advantages - mbatch_advantages.mean()) / (mbatch_advantages.std() + self.norm_adv_eps)
         
                     # ** compute policy loss **

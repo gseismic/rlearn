@@ -43,7 +43,7 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
 
 def test_ppo_draft_continous():
     # env setup
-    num_envs = 20 
+    num_envs = 6
     # env_id = 'CliffWalking-v0'
     # env_id = 'Hopper-v4' # 'Pendulum-v1'
     env_id = 'HalfCheetah-v4'
@@ -67,7 +67,7 @@ def test_ppo_draft_continous():
         'gamma': gamma,
         'gae_lambda': gae_lambda,
         'rpo_alpha': None, # 0.5, ## 非None(0.5) 会导致clipfracs过高 0.7+
-        'ent_coef': 0.001, # XXX zero
+        'ent_coef': 0.000, # XXX zero
         'clip_coef': 0.2,
         'vf_coef': 0.5,
         'clip_vloss': True, # False, # # 在归一化的advantages尺度下，使用固定的绝对Clip ε就显得更加合理了
