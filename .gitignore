@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.pth
 final_models/
+runs/
 
 # C extensions
 *.so

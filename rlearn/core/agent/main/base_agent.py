@@ -15,6 +15,7 @@ class BaseAgent(ABC):
         self.logger = logger or user_logger
         self.lang = self.config.get('lang', 'en')
         self.seed = seed
+        self.writer = None
         self.set_env(env)
     
     def set_env(self, env):

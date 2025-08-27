@@ -103,9 +103,9 @@ class PPOAgent(OnlineAgentVE):
     def save_lr(self):
         self.lr_backup = self.optimizer.param_groups[0]["lr"]
     
-    def decay_lr(self, ratio):
-        assert 0 < ratio <= 1
-        self.optimizer.param_groups[0]["lr"] = self.lr_backup * ratio
+    # def decay_lr(self, ratio):
+    #     assert 0 < ratio <= 1
+    #     self.optimizer.param_groups[0]["lr"] = self.lr_backup * ratio
         
     def restore_lr(self):
         self.optimizer.param_groups[0]["lr"] = self.lr_backup
@@ -181,7 +181,7 @@ class PPOAgent(OnlineAgentVE):
             returns = advantages + values
         return advantages, returns
             
-    def after_episode(self, epoch, episode_reward=None, **kwargs):
+    def after_episode(self, epoch, total_steps, episode_reward=None, **kwargs):
         should_exit_learning = False
         (states, actions, rewards, dones, values, log_probs) = (
             self.states, self.actions, self.rewards, self.dones, self.values, self.log_probs
@@ -204,24 +204,24 @@ class PPOAgent(OnlineAgentVE):
         v_clipfrac = 0.0
         
         # 每个数据还是跑一遍，但分多批
-        self.save_lr()
+        # self.save_lr()
         exit_this_train = False
-        for epoch in range(self.update_epochs):
+        for _epoch in range(self.update_epochs):
             if exit_this_train:
                 break
             
-            approx_kls = []
+            approx_kls = [] 
             approx_kl = None
             assert self.minibatch_size > 1
             clipfrac = None
             # 因为数据高度复用了
             # 增加内部循环，因为local_minibatch_size变大了，循环次数为：self.batch_size/self.minibatch_size
             if 0:
-                local_minibatch_size = min(int(self.minibatch_size*1.005**epoch), self.batch_size)
+                local_minibatch_size = min(int(self.minibatch_size*1.005**_epoch), self.batch_size)
                 _std_num_loops = int(self.batch_size/self.minibatch_size)
                 _current_num_loops = int(self.batch_size/local_minibatch_size)
                 recommended_num_loops = int(_std_num_loops/_current_num_loops)
-                # print(f'**{recommended_num_loops=}, {_std_num_loops=}, {_current_num_loops=}')   
+                print(f'**{recommended_num_loops=}, {_std_num_loops=}, {_current_num_loops=}')   
             else:
                 local_minibatch_size = self.minibatch_size
                 recommended_num_loops = 1
@@ -236,8 +236,8 @@ class PPOAgent(OnlineAgentVE):
                     mini_batch_indices = batch_indices[start:end] 
                     # 因为有update_epochs随机复用数据，丢弃部分数据是可行的
                     # 防止数据太少导致误差
-                    if len(mini_batch_indices) != local_minibatch_size:
-                        continue 
+                    # if len(mini_batch_indices) != local_minibatch_size:
+                    #     continue 
 
                     # NOTE: 因为是mini-batch, 所有计算很快
                     if isinstance(self.single_action_space, gym.spaces.Box):
@@ -260,7 +260,7 @@ class PPOAgent(OnlineAgentVE):
                     
                     # ** normalize mbatch_advantages **
                     mbatch_advantages = batch_advantages[mini_batch_indices]
-                    if self.norm_adv:
+                    if self.norm_adv: 
                         mbatch_advantages = (mbatch_advantages - mbatch_advantages.mean()) / (mbatch_advantages.std() + self.norm_adv_eps)
         
                     # ** compute policy loss **
@@ -303,7 +303,7 @@ class PPOAgent(OnlineAgentVE):
                         nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                     self.optimizer.step() 
 
-                if epoch % 20 == 0:
+                if _epoch % 20 == 0:
                     self.logger.debug(
                         f'\tepoch:{epoch:2d}:{iloop+1}/{recommended_num_loops} approx_kl:{np.mean(approx_kls):<7.5f} '
                         f"mbs:{local_minibatch_size} frac:{clipfrac:<5.3f} "
@@ -314,8 +314,8 @@ class PPOAgent(OnlineAgentVE):
                     # self._debug_test()
                 if self.clipfrac_stop is not None and len(clipfracs) > 3 and np.mean(clipfracs[-3:]) >= self.clipfrac_stop:
                     self.logger.debug(f"Early stopping at step {epoch} due to clipping: {clipfrac}")
-                    exit_this_train = True
-                    break
+                    # exit_this_train = True
+                    # break
                 
                 if self.v_clipfrac_stop is not None and len(v_clipfracs) > 3 and np.mean(v_clipfracs[-3:]) >= self.clipfrac_stop:
                     self.logger.debug(f"Early stopping at step {epoch} due to Value clipping: {v_clipfrac}")
@@ -333,7 +333,7 @@ class PPOAgent(OnlineAgentVE):
                     should_exit_learning = True
                     break
                 
-        self.restore_lr()
+        # self.restore_lr()
         pred_returns, true_returns = batch_values.cpu().numpy(), batch_returns.cpu().numpy()
         var_true_returns = np.var(true_returns)
         if var_true_returns == 0:
@@ -349,6 +349,12 @@ class PPOAgent(OnlineAgentVE):
             'v_explained_var': v_explained_var,
             'clipfracs': np.mean(clipfracs)
         }
+        self.writer.add_scalar("losses/loss", loss.item(), total_steps)
+        self.writer.add_scalar("losses/pg_loss", pg_loss.item(), total_steps)
+        self.writer.add_scalar("losses/entropy_loss", entropy_loss.item(), total_steps)
+        self.writer.add_scalar("losses/v_loss", v_loss.item(), total_steps)
+        self.writer.add_scalar("losses/v_explained_var", v_explained_var, total_steps)
+        self.writer.add_scalar("losses/clipfrac", np.mean(clipfracs), total_steps)
         self.logger.info(f'**{episode_info=}')
         # self._debug_test()
 

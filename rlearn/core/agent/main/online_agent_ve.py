@@ -8,6 +8,7 @@ from .base_agent import BaseAgent
 from ....utils.i18n import Translator
 # from ....utils.exit_monitor.exit_monitor_ve import ExitMonitorVE
 from ....utils.exit_monitor.exit_monitor import ExitMonitor
+from torch.utils.tensorboard import SummaryWriter
 
 class OnlineAgentVE(BaseAgent):
     def __init__(self, env=None, config=None, logger=None, seed=None):
@@ -23,7 +24,7 @@ class OnlineAgentVE(BaseAgent):
     def before_episode(self, *args, **kwargs):
         pass
     
-    def after_episode(self, epoch, episode_reward=None, *args, **kwargs):
+    def after_episode(self, epoch, total_steps, episode_reward=None, *args, **kwargs):
         pass
     
     def after_learn(self, *args, **kwargs):
@@ -40,6 +41,7 @@ class OnlineAgentVE(BaseAgent):
               min_reward_threshold=None,
               max_episodes_without_improvement=None,
               verbose_freq=10,
+              exp_name='main',
               checkpoint_freq=None,
               checkpoint_dir='checkpoints',
               final_model_name=None,
@@ -52,6 +54,12 @@ class OnlineAgentVE(BaseAgent):
             (3) avg_reward >= best_avg_reward + improvement_threshold
             (4) avg_reward > best_avg_reward * (1 + improvement_ratio_threshold)
         """
+        run_name = f"{exp_name}__{self.seed}__{int(time.time())}"
+        self.writer = SummaryWriter(f"runs/{run_name}")
+        self.writer.add_text(
+            "hyperparameters",
+            "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in self.config.items()])),
+        )
         if self.env is None:
             raise ValueError("Environment not set. Please call set_env() before learning.")
         exit_monitor = ExitMonitor({
@@ -120,7 +128,7 @@ class OnlineAgentVE(BaseAgent):
                 
                 # 因为一次时刻可能多个环境完成 
                 if epoch_step == steps_per_epoch - 1:
-                    should_exit_learning, episode_info = self.after_episode(epoch=epoch)
+                    should_exit_learning, episode_info = self.after_episode(epoch=epoch, total_steps=total_steps)
                 else:
                     should_exit_learning = False
                     episode_info = None
@@ -139,7 +147,11 @@ class OnlineAgentVE(BaseAgent):
                         self.logger.info(f"{tr('exit_reason')}: {tr(exit_reason)}")
                         should_exit_program = True
                         break 
-                                  
+                for r in cur_episode_acc_rewards[cur_episode_ends]:
+                    self.writer.add_scalar("charts/episodic_return", r, total_steps)
+                for l in cur_episode_acc_lengths[cur_episode_ends]:
+                    self.writer.add_scalar("charts/episodic_length", l, total_steps)
+               
                 cur_episode_acc_rewards[cur_episode_ends] = 0 
                 cur_episode_acc_lengths[cur_episode_ends] = 0 
 

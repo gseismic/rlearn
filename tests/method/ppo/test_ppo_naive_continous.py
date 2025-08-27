@@ -30,11 +30,11 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
-        # env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
-        # env = gym.wrappers.RecordEpisodeStatistics(env)
-        # env = gym.wrappers.ClipAction(env) # np.clip(action, self.action_space.low, self.action_space.high)
-        # env = gym.wrappers.NormalizeObservation(env)
-        # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10), env.observation_space)
+        env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = gym.wrappers.ClipAction(env) # np.clip(action, self.action_space.low, self.action_space.high)
+        env = gym.wrappers.NormalizeObservation(env)
+        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10), env.observation_space)
         # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
         # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
@@ -43,7 +43,7 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
 
 def test_ppo_draft_continous():
     # env setup
-    num_envs = 1
+    num_envs = 20 
     # env_id = 'CliffWalking-v0'
     # env_id = 'Hopper-v4' # 'Pendulum-v1'
     env_id = 'HalfCheetah-v4'
@@ -66,11 +66,11 @@ def test_ppo_draft_continous():
         'learning_rate': 3e-4,
         'gamma': gamma,
         'gae_lambda': gae_lambda,
-        'rpo_alpha': 0.5, # 0.5, # 
-        'ent_coef': 0.0, # XXX zero
+        'rpo_alpha': None, # 0.5, ## 非None(0.5) 会导致clipfracs过高 0.7+
+        'ent_coef': 0.001, # XXX zero
         'clip_coef': 0.2,
         'vf_coef': 0.5,
-        'clip_vloss': False, # XXX
+        'clip_vloss': True, # False, # # 在归一化的advantages尺度下，使用固定的绝对Clip ε就显得更加合理了
         'clip_coef_v': 0.2, # clip
         'update_epochs': 10, # 200
         'num_minibatches': 32, # minibatch_size: batch_size/num_minibatches
