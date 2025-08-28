@@ -30,6 +30,7 @@ class PPOAgent(OnlineAgentVE):
             self.state_dim = self.single_observation_space.shape
         # algo
         self.learning_rate = self.config.get('learning_rate', 2.5e-4)
+        self.ent_coef_lr = self.config.get('ent_coef_lr', 0.001)
         self.anneal_lr = self.config.get('anneal_lr', True) 
         self.gamma = self.config.get('gamma', 0.99)
         self.gae_lambda = self.config.get('gae_lambda', 0.95) 
@@ -40,6 +41,14 @@ class PPOAgent(OnlineAgentVE):
         self.clip_coef_v = self.config.get('clip_coef_v', 0.8)
         self.clip_vloss = self.config.get('clip_vloss', False) # False
         self.ent_coef = self.config.get('ent_coef', 0.01)
+        # 如果autotune为真，如果ent_coef不是None，则ent_coef为初始值
+        self.autotune_ent_coef = self.config.get('autotune_ent_coef', False)
+        assert self.autotune_ent_coef or self.ent_coef is not None
+        self.target_entropy_ratio = self.config.get('target_entropy_ratio', 1.0)
+        # assert (
+        #     (self.ent_coef is None and self.autotune_ent_coef) 
+        #     or (self.ent_coef is not None and not self.autotune_ent_coef)
+        # )
         self.vf_coef = self.config.get('vf_coef', 0.5)
         self.max_grad_norm = self.config.get('max_grad_norm', 0.5)
         self.target_kl = self.config.get('target_kl', None)
@@ -70,13 +79,41 @@ class PPOAgent(OnlineAgentVE):
             self.actor_critic = ActorCriticDiscrete(self.state_dim, self.single_action_space.n).to(self.device)
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=self.learning_rate, eps=self.optimizer_eps)
         self.logger.info(f'config: {self.config}')
+
+        # 判断是连续还是离散动作空间
+        self.is_continuous = isinstance(self.env.action_space, gym.spaces.Box)
+        self.action_dim = self.env.action_space.shape[0] if self.is_continuous else self.env.action_space.n
+        # 初始化
+        if self.autotune_ent_coef:
+            self.target_entropy = self._get_target_entropy()
+            initial_ent_coef = self.ent_coef if self.ent_coef is not None else 0.01
+            self.log_ent_coef = torch.tensor([np.log(initial_ent_coef)], requires_grad=True) # 初始β=0.01
+            self.optimizer_ent_coef = torch.optim.Adam([self.log_ent_coef], lr=self.ent_coef_lr)
+            self.ent_coef = torch.exp(self.log_ent_coef).item()
+            # raise 
+        else: 
+            # self.ent_coef = self.config.get('ent_coef', 0.01)
+            self.optimizer_ent_coef = None
         # self.actor = get_actor_model(env, model_type='MLPActor').to(self.device)
         # self.critic = get_critic_model(env, model_type='MLPCritic').to(self.device)
         # self.optimizer = optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=config.learning_rate)
     
-    def before_learn(self, states, infos, **kwargs):
-        num_envs = self.num_envs
-        steps_per_epoch = self.steps_per_epoch
+    def _get_target_entropy(self):
+        """根据动作空间类型设置目标熵"""
+        if self.is_continuous:
+            # 连续动作空间：-dim(A)
+            return -self.action_dim * self.target_entropy_ratio
+        else:
+            # 离散动作空间：0.5 * log(n_actions)
+            return 0.5 * np.log(self.action_dim) * self.target_entropy_ratio
+        
+    def get_beta(self):
+        """获取当前的熵系数值"""
+        return torch.exp(self.log_beta).item() 
+    
+    def before_learn(self, states, infos, **kwargs): 
+        num_envs = self.num_envs 
+        steps_per_epoch = self.steps_per_epoch 
         # batch_size: 单个epoch，所有env的step步数steps_per_epoch
         self.batch_size = int(self.num_envs * steps_per_epoch)
         self.minibatch_size = int(self.batch_size // self.num_minibatches)
@@ -201,12 +238,18 @@ class PPOAgent(OnlineAgentVE):
         
         batch_indices = np.arange(self.batch_size)
         clipfracs = []
+        all_approx_kls = []
+        all_approx_kls_old = []
         v_clipfracs = []
         v_clipfrac = 0.0
         
         if self.norm_adv and not self.use_minibatch_norm_adv:
             batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std() + self.norm_adv_eps)
         
+        # 在epoch循环开始前初始化
+        if self.autotune_ent_coef:
+            total_entropy = 0.0
+            entropy_count = 0
         # 每个数据还是跑一遍，但分多批
         # self.save_lr()
         exit_this_train = False
@@ -217,8 +260,8 @@ class PPOAgent(OnlineAgentVE):
             approx_kls = [] 
             approx_kl = None
             assert self.minibatch_size > 1
-            clipfrac = None
-            # 因为数据高度复用了
+            clipfrac = None 
+            # 因为数据高度复用了 
             # 增加内部循环，因为local_minibatch_size变大了，循环次数为：self.batch_size/self.minibatch_size
             if 0:
                 local_minibatch_size = min(int(self.minibatch_size*1.005**_epoch), self.batch_size)
@@ -252,10 +295,13 @@ class PPOAgent(OnlineAgentVE):
                     ratio = logratio.exp()
                     with torch.no_grad():
                         # `http://joschu.net/blog/kl-approx.html`
+                        old_approx_kl = (-logratio).mean()
                         approx_kl = ((ratio - 1) - logratio).mean()
                         approx_kls += [approx_kl.cpu().item()]
                         clipfrac = ((ratio - 1.0).abs() > self.clip_coef).float().mean().item()
                         clipfracs += [clipfrac]
+                        all_approx_kls += [approx_kl.cpu().item()]
+                        all_approx_kls_old += [old_approx_kl.cpu().item()]
                     
                     # XXX TODO: 这里减去的是minibatch的平均值, 可以考虑减去整个steps_per_epoch*num_envs的平均值
                     #           或其他自定义长度的平均值
@@ -306,7 +352,11 @@ class PPOAgent(OnlineAgentVE):
                     if self.max_grad_norm is not None:
                         nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                     self.optimizer.step() 
-
+                    
+                    if self.autotune_ent_coef:
+                        total_entropy += entropy.mean().item()
+                        entropy_count += 1
+                        
                 if _epoch % 20 == 0:
                     self.logger.debug(
                         f'\tepoch:{epoch:2d}:{iloop+1}/{recommended_num_loops} approx_kl:{np.mean(approx_kls):<7.5f} '
@@ -336,7 +386,19 @@ class PPOAgent(OnlineAgentVE):
                     exit_this_train = True
                     should_exit_learning = True
                     break
-                
+               
+        
+        # 更新熵系数beta（借鉴SAC的思路）
+        if self.autotune_ent_coef and entropy_count > 0:
+            mean_entropy = total_entropy / entropy_count # 断开与策略网络计算图的连接 
+            ent_coef_loss = self.log_ent_coef * (mean_entropy - self.target_entropy)
+            self.optimizer_ent_coef.zero_grad()
+            ent_coef_loss.backward()
+            self.optimizer_ent_coef.step()
+            
+            # 更新当前的熵系数值, ​.item()会自动断开与计算图的连接，因为它返回的是一个纯 Python 值
+            self.ent_coef = torch.exp(self.log_ent_coef).item()
+ 
         # self.restore_lr()
         pred_returns, true_returns = batch_values.cpu().numpy(), batch_returns.cpu().numpy()
         var_true_returns = np.var(true_returns)
@@ -351,7 +413,10 @@ class PPOAgent(OnlineAgentVE):
             'entropy_loss': entropy_loss.item(),
             'v_loss': v_loss.item(),
             'v_explained_var': v_explained_var,
-            'clipfracs': np.mean(clipfracs)
+            'clipfracs': np.mean(clipfracs),
+            'ent_coef': self.ent_coef,
+            'approx_kl': np.mean(all_approx_kls),
+            'approx_kl_classic': np.mean(all_approx_kls_old)
         }
         self.writer.add_scalar("losses/loss", loss.item(), total_steps)
         self.writer.add_scalar("losses/pg_loss", pg_loss.item(), total_steps)
@@ -359,7 +424,10 @@ class PPOAgent(OnlineAgentVE):
         self.writer.add_scalar("losses/v_loss", v_loss.item(), total_steps)
         self.writer.add_scalar("losses/v_explained_var", v_explained_var, total_steps)
         self.writer.add_scalar("losses/clipfrac", np.mean(clipfracs), total_steps)
-        self.logger.info(f'**{episode_info=}')
+        self.writer.add_scalar("losses/ent_coef", self.ent_coef, total_steps)
+        self.writer.add_scalar("losses/approx_kl", np.mean(all_approx_kls), total_steps)
+        self.writer.add_scalar("losses/approx_kl_classic", np.mean(all_approx_kls_old), total_steps)
+        self.logger.info(f'**{episode_info=}') 
         # self._debug_test()
 
         return should_exit_learning, episode_info
